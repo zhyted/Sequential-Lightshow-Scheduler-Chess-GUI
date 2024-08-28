@@ -24,7 +24,6 @@ public class Board : MonoBehaviour
     public Color selectColor;
 
 
-
     public Dictionary<Vector2, Renderer> squares = new Dictionary<Vector2, Renderer>();
 
     public void ColorRefresh()
@@ -68,6 +67,13 @@ public class Board : MonoBehaviour
         CreateBoard();
     }
 }
+
+
+
+
+
+
+
 
 
 
