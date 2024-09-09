@@ -2,6 +2,8 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading.Tasks;
+using Unity.VisualScripting;
 using UnityEditor;
 using UnityEngine;
 #if UNITY_EDITOR
@@ -10,6 +12,7 @@ using UnityEngine;
 public class Board : MonoBehaviour
 {
     [SerializeField] private GameObject squarePrefab;
+    public Storage storage;
 
 
     [SerializeProperty("lightColor")]
@@ -17,16 +20,42 @@ public class Board : MonoBehaviour
 
     [SerializeProperty("darkColor")]
     public Color _darkColor;
-    public Color lightColor { get { return _lightColor; } set { ColorRefresh(); _lightColor = value; } }
-    public Color darkColor { get { return _darkColor; } set { ColorRefresh(); _darkColor = value; } }
+    public Color lightColor { get { return _lightColor; } set { RefreshSquares(); _lightColor = value; } }
+    public Color darkColor { get { return _darkColor; } set { RefreshSquares(); _darkColor = value; } }
 
     public Color legalMovesColor;
     public Color selectColor;
 
+    public string GetFormattedColumn(Vector2 position)
+    {
+        return position.x switch { 1 => "a", 2 => "b", 3 => "c", 4 => "d", 5 => "e", 6 => "f", 7 => "g", 8 => "h", _ => "uh this isn't supposed to happen" };
+    }
+    public string GetFormattedType(Piece.Type type)
+    {
+        return type switch
+        {
+            Piece.Type.Knight => "N",
+            Piece.Type.Pawn => "",
+            _ => type.ToString().Substring(0, 1)
+        };
+    }
 
     public Dictionary<Vector2, Renderer> squares = new Dictionary<Vector2, Renderer>();
 
-    public void ColorRefresh()
+    public Color32 GetSquareColor(Vector2 position)
+    {
+        return (position.x + position.y) % 2 != 0 ? lightColor : darkColor;
+    }
+
+    public Material RefreshSquare(Vector2 position)
+    {
+        var square = squares[position];
+        Color color = GetSquareColor(position);
+        square.material.color = color;
+        return square.material;
+    }
+
+    public void RefreshSquares()
     {
         foreach(var square in squares)
         {
@@ -36,6 +65,8 @@ public class Board : MonoBehaviour
 
         //Debug.Log($"Light Colour: ({lightColor.r*255},{lightColor.g*255},{lightColor.b*255}) Dark Colour: ({darkColor.r * 255},{darkColor.g * 255},{darkColor.b * 255})");
     }
+
+    
 
     void CreateBoard()
     {
