@@ -4,22 +4,28 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.NetworkInformation;
 using Unity.VisualScripting;
-using UnityEditor.Experimental.GraphView;
+using UnityEditor;
 using UnityEngine;
-using UnityEngine.UIElements;
-
 public class Piece : MonoBehaviour
 {
+    //flags
     public bool hasMoved = false;
     public bool canCastle = false;
+
+    //guiflags
+    public bool _guiPinLineShown = false;
+    public bool _guiCheckLineShown = false;
+    public bool _guiChangedMovesShown = false;
 
     public HashSet<Piece> piecesThatAttack = new HashSet<Piece>(8);
 
     public Vector2 position;
     public int id;
 
-    [SerializeField] Storage storage;
-    Game game;
+    public Storage storage;
+    public Game game;
+
+    
 
     private void Start()
     {
@@ -53,80 +59,132 @@ public class Piece : MonoBehaviour
 
     public void Attacked()
     {
-
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
         ////Debug.Log($"PIECEATTACKED, {colour}{type} id:{id} atPos: {position}");
+
         UpdateChecks();
         UpdatePins();
         UpdateLegalMoves();
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
+    }
+
+    public void _resetGuiFlags()
+    {
+        _guiChangedMovesShown = false;
+        _guiCheckLineShown = false;
+        _guiPinLineShown = false;
+        _guiChangedMovesShown = false;
     }
 
     public bool dead = false;
 
     public void Capture()
     {
-        if (type == Type.King) { storage.game.Checkmate(); }
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
         dead = true;
-        game.pinLines[this].Clear();
+        //foreach (var piece in piecesThatAttack) { RemoveAttackingPiece(piece}; }
+        //foreach (var piece in game.GetPiecesOf(game.GetEnemyColour(colour))) { piece.RemoveAttackingPiece(this); }
+
+        UpdateAttackingPieces(DoRemove: true);
+        game.legalMoves[this].Clear();
 
         game.RemoveControlledSquares(this);
 
-        UpdateAttackingPieces(DoRemove: true);
-
+        game.pinLines[this].Clear();
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
         Destroy(gameObject);
     }
+
+    void PromotePawn()
+    {
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
+        storage.game.pieces[type].Remove(id);
+
+        gameObject.GetComponent<SpriteRenderer>().sprite = (Sprite)Resources.Load($"Assets/Sprites/{colour}queen.png", typeof(Sprite));
+        //TODO: add option to choose to promote to knight, bishop or rook
+        type = Type.Queen;
+
+        storage.game.pieces[type].Add(id, this);
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
+    }
+
     public void Moved()
     {
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
+        //Pawn Promotion
+        if ( type == Type.Pawn && (position.y == 8 || position.y == 1) )
+        {
+            PromotePawn();
+        }
         UpdateAttackingPieces(DoRemove: true);
-        foreach(var piece in game.GetPiecesOf(game.GetEnemyColour(colour))) { piece.RemoveAttackingPiece(this); }
+
+        //TODO: update to only run on influenced pieces
+        foreach (var piece in game.GetPiecesOf(game.GetEnemyColour(colour))) { piece.RemoveAttackingPiece(this); piece.UpdateChecks(); piece.UpdatePins(); piece.UpdateLegalMoves(); piece.UpdateAttackingPieces(true); }
 
         if (type == Type.King) UpdatePinsSurroundingPieces();
-        game.RemoveControlledSquares(this);
+
         UpdatePins();
         UpdateLegalMoves();
-        game.RefreshDebugSquares();
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
     }
 
 
     public void UpdateLegalMoves()
     {
         if (dead) return;
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
 
-        game.pinLines[this].Clear();
+        //game.legalMoves[this].Clear();
 
+        //game.controlledSquares[colour][id].Clear();
+        UpdatePins();
+        game.RemoveControlledSquares(this);
         game.legalMoves[this].Clear();
 
-        game.controlledSquares[colour][id].Clear();
-        UpdatePins();
-        
         _GenerateMoves();
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
     }
 
     public void UpdateCastle()
     {
         if (dead) return;
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
 
         var king = game.GetPiecesOf(Type.King, colour)[0];
         if (hasMoved || king.hasMoved) { canCastle = false; return; }
 
-        if (game.GetLine(position, king.position).firstPiece == king) canCastle = true;
+        if (game.GetLine(position, king.position).firstPiece == king && position.y == 8 || position.y == 1) canCastle = true;
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
     }
 
-    void UpdateChecks()
+    public void UpdateChecks()
     {
-        if (type == Type.King && game.GetControlledEnemySquares(colour).Contains(position))
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
+        if (type == Type.King && game.GetControlledSquares(game.GetEnemyColour(colour)).Contains(position))
         {
             Debug.Log($"{colour}{type} Checked");
             game.checkKing(this);
+
+            foreach (var attackingPiece in piecesThatAttack)
+            {
+                if (attackingPiece.colour == colour) continue;
+
+                var line = game.GetLine(from: attackingPiece.position, inDirectionOf: position);
+                if (line.lineVectors is null) continue;
+                game.pinLines.TryAdd(this, new Dictionary<Piece, HashSet<Vector2>>()); game.pinLines[this].TryAdd(attackingPiece, new HashSet<Vector2>(line.lineVectors));
+            }
+
+            game.pinLines.TryAdd(this, new Dictionary<Piece, HashSet<Vector2>>());
             
             foreach (var piece in game.GetPiecesOf(colour))
             {
-                if (piece.id == id) continue;
-                UpdatePins();
+                //if (piece.id == id) continue;
+                piece.UpdatePins();
                 piece.UpdateLegalMoves();
-
-                game.GUIDrawCheckLines(piece.colour);
             }
+
         }
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
     }
 
     public bool RemoveAttackingPiece(Piece attackingPiece)
@@ -135,13 +193,15 @@ public class Piece : MonoBehaviour
     }
     public void UpdateAttackingPieces(bool DoRemove)
     {
-        foreach (var piece in new HashSet<Piece>(piecesThatAttack)) { if (DoRemove) piece.RemoveAttackingPiece(this); piece.UpdateChecks(); piece.UpdatePins(); piece.UpdateLegalMoves(); }
+        foreach (var piece in new HashSet<Piece>(piecesThatAttack)) { if (DoRemove) { piece.RemoveAttackingPiece(this); } piece.UpdatePins(); piece.UpdateLegalMoves(); }
     }
     public void UpdatePins()
     {
+        game.pinLines[this].Clear();
         if (dead) return;
 
-        game.pinLines[this].Clear();
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
+
         int count = 0;
 
         foreach (var attackingPiece in piecesThatAttack)
@@ -151,17 +211,18 @@ public class Piece : MonoBehaviour
 
             var line = game.GetLine(from: attackingPiece.position, inDirectionOf: position, phaseThroughPiece: this);
 
-            if (line.firstPiece is not null && line.firstPiece?.colour == colour && line.firstPiece?.type != Type.Pawn) {
+            if (line.firstPiece is not null && line.firstPiece?.colour == colour) {
 
-                if (type != Type.Pawn) Debug.Log($"{colour}{type}, pos:{position} HAS BEEN PINNED | to: {line.firstPiece.colour}{line.firstPiece.type}, pos:{line.firstPiece.position} | by: {attackingPiece.colour}{attackingPiece.type} pos:{attackingPiece.position}");
+                //Debug.Log($"{colour}{type}, pos:{position} HAS BEEN PINNED | to: {line.firstPiece.colour}{line.firstPiece.type}, pos:{line.firstPiece.position} | by: {attackingPiece.colour}{attackingPiece.type} pos:{attackingPiece.position}");
                 game.pinLines[this].TryAdd(line.firstPiece, line.lineVectors);
             }
         }
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
     }
 
     void UpdatePinsSurroundingPieces()
     {
-        foreach (var direction in Piece.directions)
+        foreach (var direction in directions)
         {
             var pieceOnDirection = game.GetPieceAtPosition(position + direction);
             if (pieceOnDirection) 
@@ -175,11 +236,12 @@ public class Piece : MonoBehaviour
     public bool IsMoveACheckBlock(Vector2 move)
     {
         Piece king = game.GetPiecesOf(Type.King, colour)[0];
+        if (king.piecesThatAttack.Count == 0) return true;
 
         bool isKing = type == Type.King;
-        HashSet<Vector2> enemyControlledSquares = game.GetControlledEnemySquares(colour);
+        HashSet<Vector2> enemyControlledSquares = game.GetControlledSquares(game.GetEnemyColour(colour));
 
-        if (!enemyControlledSquares.Contains(move) && isKing) return true;
+        if (enemyControlledSquares.Contains(move) && isKing) return false;
 
         bool isPinnedToKing = game.pinLines[this].ContainsKey(king);
 
@@ -192,40 +254,59 @@ public class Piece : MonoBehaviour
             if (checkingPiece.type == Type.Knight) {
                 HashSet<Vector2> knightMoves = game.GetControlledSquares(checkingPiece);
 
-                if ((type == Type.King && knightMoves.Contains(move)) || (type != Type.King && move != checkingPiece.position)) return false;
+                if ((isKing && knightMoves.Contains(move)) || (!isKing && move != checkingPiece.position)) return false;
                 else return true;
             }
 
-            var line = game.GetLine(checkingPiece.position, king.position).lineVectors;
-            if (line is null) continue;
+            var line = game.GetLine(checkingPiece.position, king.position);
+
+            linecount++;
+
+            if (isKing) {
+                if (line.combinedLine.Contains(move) && move != checkingPiece.position) return false;
+
+                if (move == checkingPiece.position || !line.combinedLine.Contains(move)) { checkBlockCounter++; }
+                else { return false; }
+
+                continue;
+            }
+
+            if (line.lineVectors is null) continue;
+            //Debug.Log(line.combinedLine.Serialize());
 
             ////Debug.Log($"KingCheckLineCalc. Piece:{colour}{type} MOVE:{move} checkLine:{line.ToSeparatedString(",")} LINECONTAINSMOVE:{line.Contains(move)} isPinnedToKing{isPinnedToKing} |  id:{id} pos:{position}  |  checkingPiece:{checkingPiece.colour}{checkingPiece.type}");
 
-            linecount++;
-            if (line.Contains(move)) checkBlockCounter++;
+            //Debug.Log(checkingPiece.type);
+            if (line.lineVectors.Contains(move)) checkBlockCounter++;
 
-            if ((line.Contains(move) && isKing) || (checkBlockCounter != linecount)) return false;
+            if (checkBlockCounter != linecount) return false;
         }
 
         //allows move if it blocks all checks; and if it is pinned to the king- doesn't reveal another check by moving off of the file/rank that pins it to the king
-        if (!isPinnedToKing || (game.pinLines[this].TryGetValue(king, out var kingPinLine) && kingPinLine.Contains(move))) { Debug.Log($"LEGALCHECKBLOCKINGMOVEFOUND, {colour}{type} pos:{position} move:{move}"); return true; }
+        if (!isPinnedToKing || (game.pinLines[this].TryGetValue(king, out var kingPinLine) && kingPinLine.Contains(move))) {
+            //Debug.Log($"LEGALCHECKBLOCKINGMOVEFOUND, {colour}{type} pos:{position} move:{move}"); 
+            return true; }
 
         return false;
     }
 
+    public Dictionary<int, List<Vector2>> controlledSquaresChangeCache = new Dictionary<int, List<Vector2>>(8);
 
+    Queue<Piece> attackedPieceUpdateQueue = new Queue<Piece>();
 
 
     public static Vector2[] directions = { new Vector2(1, 0), new Vector2(0, -1), new Vector2(-1, 0), new Vector2(0, 1), new Vector2(-1, 1), new Vector2(1, 1), new Vector2(1, -1), new Vector2(-1, -1) };
     void _GenerateMoves()
     {
+        GUI.DebugInfo.pieceCalculationsRunning += 1;
         //Index move direction Visualization, P = Piece
         //   5 4 6
         //   3 P 1
         //   8 2 7
         //
+        controlledSquaresChangeCache.Clear();
 
-        if (type == Type.King && !hasMoved) {
+        if (type == Type.King && !hasMoved && position.y == 1 || position.y == 8) {
             foreach (var rook in game.pieces[Type.Rook].Values) {
 
                 if (rook.canCastle && rook.colour == colour) game.legalMoves[this].Add( new Vector2( x: (rook.position.x == 1 ? position.x - 2 : position.x + 2), position.y ) );
@@ -249,6 +330,7 @@ public class Piece : MonoBehaviour
 
         //nothin' to see here keep scrolling
         Vector2[] directions = type != Type.Knight ? Piece.directions : new Vector2[]{ new Vector2(-2, 1), new Vector2(-1, 2), new Vector2(1, 2), new Vector2(2, -1), new Vector2(-2, -1), new Vector2(-1, -2), new Vector2(1, -2), new Vector2(2, 1) };
+
         
 
         for (Direction direction = (Direction)startIndex; direction <= (Direction)endIndex; direction++)
@@ -261,12 +343,16 @@ public class Piece : MonoBehaviour
             int pawnReversingVariable = 0;
             if (type == Type.Pawn && colour == Colour.Black) { pawnReversingVariable = direction == Direction.up ? -2 : 2; }
 
+            //controlled squares cache in each direction, adds it for a cool gui effect if the direction contains new moves
+            Dictionary<int, List<Vector2>> csDirCache = new Dictionary<int, List<Vector2>>(9);
 
+            bool newMoveInDirectionFound = false;
 
             Vector2 move = position;
 
             for (int depth = 0; depth < directionDepthLimit; depth++)
             {
+                csDirCache.TryAdd(depth+1, new List<Vector2>(8));
                 if (depth >= directionDepthLimit) break;
 
                 
@@ -274,14 +360,14 @@ public class Piece : MonoBehaviour
 
 
                 if (move.x < 1 || move.y < 1 || move.x > 8 || move.y > 8) break;
-                if (type == Type.King && game.GetControlledEnemySquares(colour).Contains(move)) break;
+                if (type == Type.King && game.GetControlledSquares(game.GetEnemyColour(colour)).Contains(move)) break;
 
                 Piece pieceOnNewSquare = game.GetPieceAtPosition(move);
 
 
                 ////Debug.Log($"check:{game.isInCheck} CalledFrom:{colour} ");
 
-                if (game.isInCheck == true && game.turnColour == colour)
+                if (game.checkedColour == colour)
                 {
                     if (IsMoveACheckBlock(move) == false) {
                         
@@ -304,7 +390,13 @@ public class Piece : MonoBehaviour
                     {
                         if (direction == Direction.up) { controlSquareSkip = true; }
                         //if no pieces are on the pawn diagonal attack squares and no en passant is available add them to controlledsquares but not as legal moves
-                        else if (!game.GetGhostPawnAtPosition(move)) { game.AddControlledSquare(this, move); break; }
+                        else if (!game.GetGhostPawnAtPosition(move)) { 
+                            game.AddControlledSquare(this, move); 
+
+                            csDirCache[depth+1].Add(move); 
+                            if (!GUI.controlledSquaresCache[id].Contains(move) && !controlSquareSkip) { newMoveInDirectionFound = true; } 
+                            break; 
+                        }
                     }
                     else if (pieceOnNewSquare is not null)
                     {
@@ -315,7 +407,9 @@ public class Piece : MonoBehaviour
 
 
                 if (!isMoveBlockedByKingPin) {
-                    if (!controlSquareSkip) game.AddControlledSquare(this, move);
+                    if (!controlSquareSkip) { game.AddControlledSquare(this, move); csDirCache[depth+1].Add(move); }
+
+                    if (!GUI.controlledSquaresCache[id].Contains(move) && !controlSquareSkip) { newMoveInDirectionFound = true; }
 
                     if (pieceOnNewSquare is null)
                     {
@@ -325,9 +419,10 @@ public class Piece : MonoBehaviour
                     else if (pieceOnNewSquare is not null)
                     {
                         bool pieceIsEnemy = pieceOnNewSquare.colour != colour;
-                        bool addedAttacker = pieceOnNewSquare.piecesThatAttack.Add(this);
+                        bool alreadyAddedAttackingPiece = pieceOnNewSquare.piecesThatAttack.Contains(this);
+                        bool added = pieceOnNewSquare.piecesThatAttack.Add(this);
 
-                        if (addedAttacker) pieceOnNewSquare.Attacked();
+                        if (!alreadyAddedAttackingPiece && added) attackedPieceUpdateQueue.Enqueue(pieceOnNewSquare);
 
                         if (pieceIsEnemy == true)
                         {
@@ -337,15 +432,33 @@ public class Piece : MonoBehaviour
                         }
                         break;
                     }
-                    
+                   
 
                 }
                 break;
 
             }
+            if(newMoveInDirectionFound)
+            {
+                foreach (var depth in csDirCache)
+                {
+                    bool added = controlledSquaresChangeCache.TryAdd(depth.Key, new List<Vector2>(24));
+
+                    depth.Value.ForEach(p => controlledSquaresChangeCache[depth.Key].Add(p));
+                }
+            }
 
         }
-        game.GUIUpdatePiece(this);
+        //Debug.Log($"{id} contrlcache: " + game.controlledSquaresCache[id].Count); Debug.Log($"{id} changecache: " + controlledSquaresChangeCache.Count);
+
+        //if (attackedPieceUpdateQueue.Count > 0) Debug.Log($"{colour.HumanName()} {type.HumanName()} X{position.x} Y{position.y}  {attackedPieceUpdateQueue.Serialize()}");
+
+        while (attackedPieceUpdateQueue.Count > 0)
+        {
+            attackedPieceUpdateQueue.Dequeue().Attacked();
+        }
+
+        GUI.DebugInfo.pieceCalculationsRunning -= 1;
     }
 
 
@@ -357,5 +470,43 @@ public class Piece : MonoBehaviour
         ////Debug.Log($"piece:{colour}{type} PinTest, move:{move} causesCheckMate?:{moveCausesCheckMate} pinLines:{game.pinLines[this].ToSeparatedString(", ")}");
 
         return (bool)moveCausesCheckMate;
+    }
+
+    public void GUIPulseChangedControlledSquares()
+    {
+        if ((GUI.Settings.Debug.debugKey == KeyCode.W && colour == Colour.White) || (GUI.Settings.Debug.debugKey == KeyCode.B && colour == Colour.Black) || GUI.Settings.Debug.debugKey == KeyCode.A)
+        {
+            GUI.changedPiecesMoves.TryAdd(id, new Dictionary<int, List<Vector2>>());
+            GUI.changedPiecesMoves[id].Clear();
+            bool runThisShit = false;
+
+            if (controlledSquaresChangeCache.Count > 0)
+            {
+                bool Added = GUI.changedPiecesMoves[id].TryAdd(0, new List<Vector2>());
+                if (Added) GUI.changedPiecesMoves[id][0].Add(position);
+            }
+
+            foreach (var controlledSquareInCache in GUI.controlledSquaresCache[id])
+            {
+                foreach (var direction in controlledSquaresChangeCache)
+                {
+                    if (!direction.Value.Contains(controlledSquareInCache))
+                    {
+                        bool added = GUI.changedPiecesMoves[id].TryAdd(direction.Key, new List<Vector2>(24));
+                        if (added)
+                        {
+                            GUI.changedPiecesMoves[id][direction.Key] = direction.Value;
+                            runThisShit = true;
+                        }
+                    }
+                }
+            };
+            controlledSquaresChangeCache.Clear();
+            if (runThisShit)
+            {
+                GUI.GUIDrawPieceControlledSquares(this);
+            }
+            _guiChangedMovesShown = true;
+        }
     }
 }

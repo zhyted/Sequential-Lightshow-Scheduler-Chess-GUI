@@ -1,0 +1,4 @@
+repository "Chess@Vurv@cloud"
+  path "/"
+    br "/main"
+    co "/main"
